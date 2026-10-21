@@ -136,6 +136,12 @@ void radioform_dsp_reset(radioform_dsp_engine_t* engine) {
     engine->underrun_count.store(0);
 }
 
+static radioform_error_t apply_preset_internal(
+    radioform_dsp_engine_t* engine,
+    const radioform_preset_t* preset,
+    bool smooth
+);
+
 radioform_error_t radioform_dsp_set_sample_rate(
     radioform_dsp_engine_t* engine,
     uint32_t sample_rate
@@ -156,8 +162,8 @@ radioform_error_t radioform_dsp_set_sample_rate(
     // Reinitialize DC blocker with new sample rate
     engine->dc_blocker.init(static_cast<float>(sample_rate), 5.0f);
 
-    // Recalculate filter coefficients
-    return radioform_dsp_apply_preset(engine, &engine->current_preset);
+    // Recalculate filter coefficients (instant: old coefficients are meaningless at the new rate)
+    return apply_preset_internal(engine, &engine->current_preset, false);
 }
 
 // ============================================================================
@@ -214,7 +220,7 @@ void radioform_dsp_process_interleaved(
 
         // Process through EQ bands
         for (uint32_t band = 0; band < engine->num_active_bands; band++) {
-            if (engine->current_preset.bands[band].enabled) {
+            if (engine->bands[band].isActive()) {
                 // Each biquad processes both channels
                 engine->bands[band].processSample(left, right, &left, &right);
             }
@@ -338,7 +344,7 @@ void radioform_dsp_process_planar(
 
     // Process through EQ bands
     for (uint32_t band = 0; band < engine->num_active_bands; band++) {
-        if (engine->current_preset.bands[band].enabled) {
+        if (engine->bands[band].isActive()) {
             // Each biquad processes both channels
             engine->bands[band].processBuffer(
                 output_left, output_right,
@@ -414,6 +420,16 @@ radioform_error_t radioform_dsp_apply_preset(
     radioform_dsp_engine_t* engine,
     const radioform_preset_t* preset
 ) {
+    // Glide to the new coefficients. The UI re-sends the whole preset on every
+    // drag step, so instant coefficient jumps would produce zipper noise.
+    return apply_preset_internal(engine, preset, true);
+}
+
+static radioform_error_t apply_preset_internal(
+    radioform_dsp_engine_t* engine,
+    const radioform_preset_t* preset,
+    bool smooth
+) {
     if (!engine || !preset) {
         return RADIOFORM_ERROR_NULL_POINTER;
     }
@@ -424,19 +440,23 @@ radioform_error_t radioform_dsp_apply_preset(
         return err;
     }
 
-    // Copy preset
-    std::memcpy(&engine->current_preset, preset, sizeof(radioform_preset_t));
+    // Copy preset (memmove: set_sample_rate passes engine->current_preset itself)
+    std::memmove(&engine->current_preset, preset, sizeof(radioform_preset_t));
     engine->num_active_bands = preset->num_bands;
 
-    // Update filter coefficients and smoothers for each band
-    for (uint32_t i = 0; i < preset->num_bands; i++) {
-        const radioform_band_t& band = preset->bands[i];
+    const float sample_rate = static_cast<float>(engine->sample_rate);
+    const int transition = smooth ? engine->coeff_transition_samples : 0;
 
-        if (band.enabled) {
-            // Instant coefficient set on preset load (no smoothing needed)
-            engine->bands[i].setCoeffs(band, static_cast<float>(engine->sample_rate));
-        } else {
+    // Update filter coefficients for each band
+    for (uint32_t i = 0; i < RADIOFORM_MAX_BANDS; i++) {
+        const radioform_band_t& band = engine->current_preset.bands[i];
+
+        if (i >= preset->num_bands) {
             engine->bands[i].setCoeffsFlat();
+        } else if (band.enabled) {
+            engine->bands[i].setCoeffsSmooth(band, sample_rate, transition);
+        } else {
+            engine->bands[i].setCoeffsFlatSmooth(transition);
         }
     }
 
@@ -493,7 +513,9 @@ void radioform_dsp_update_band_gain(
     engine->current_preset.bands[band_index].gain_db = gain_db;
 
     // Smoothly interpolate coefficients to prevent zipper noise
+    // (a disabled band keeps its new parameters but stays bypassed)
     const radioform_band_t& band = engine->current_preset.bands[band_index];
+    if (!band.enabled) return;
     engine->bands[band_index].setCoeffsSmooth(
         band, static_cast<float>(engine->sample_rate),
         engine->coeff_transition_samples
@@ -531,7 +553,9 @@ void radioform_dsp_update_band_frequency(
     engine->current_preset.bands[band_index].frequency_hz = frequency_hz;
 
     // Smoothly interpolate coefficients to prevent zipper noise
+    // (a disabled band keeps its new parameters but stays bypassed)
     const radioform_band_t& band = engine->current_preset.bands[band_index];
+    if (!band.enabled) return;
     engine->bands[band_index].setCoeffsSmooth(
         band, static_cast<float>(engine->sample_rate),
         engine->coeff_transition_samples
@@ -552,7 +576,9 @@ void radioform_dsp_update_band_q(
     engine->current_preset.bands[band_index].q_factor = q_factor;
 
     // Smoothly interpolate coefficients to prevent zipper noise
+    // (a disabled band keeps its new parameters but stays bypassed)
     const radioform_band_t& band = engine->current_preset.bands[band_index];
+    if (!band.enabled) return;
     engine->bands[band_index].setCoeffsSmooth(
         band, static_cast<float>(engine->sample_rate),
         engine->coeff_transition_samples

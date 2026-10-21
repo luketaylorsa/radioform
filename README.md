@@ -31,7 +31,7 @@ Radioform is built as a small set of focused components, each doing one job well
 ## What You Can Do
 
 - Apply system-wide EQ across all apps
-- Shape sound with a 10-band parametric equalizer
+- Shape sound with a 10-band parametric equalizer: drag bands directly on a live frequency-response graph
 - Adjust per-band frequency, Q, and filter type (Peak, Shelf, Pass, Notch)
 - Keep levels safe with limiter and preamp guard rails
 - Load bundled presets and save custom presets (JSON on disk), safely validated

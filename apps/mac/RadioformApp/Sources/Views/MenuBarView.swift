@@ -68,16 +68,16 @@ struct MenuBarView: View {
 
                 // Only show EQ controls and preset dropdown when enabled
                 if presetManager.isEnabled {
-                    // 10-Band EQ + Preamp
-                    TenBandEQ()
+                    // Parametric EQ graph + Preamp
+                    ParametricEQ()
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
 
                     // Contextual area: band controls (focused) or presets (default)
                     if let focusedIndex = presetManager.focusedBandIndex {
-                        if focusedIndex < 10 {
-                            // Per-band controls: filter type, frequency, Q factor
-                            BandControls(bandIndex: focusedIndex)
+                        if focusedIndex < PresetManager.bandCount {
+                            // Selected band: filter type, frequency, gain, Q
+                            BandInspector(bandIndex: focusedIndex)
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 6)
                         } else {
@@ -124,7 +124,7 @@ struct MenuBarView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
         }
-        .frame(width: 340)
+        .frame(width: 380)
         .fixedSize(horizontal: false, vertical: true)
         .transaction { $0.animation = nil }
     }
@@ -476,202 +476,6 @@ struct MenuItemButton: View {
         .onHover { hovering in
             isHovered = hovering
         }
-    }
-}
-
-// MARK: - Band Focus Controls
-
-struct BandControls: View {
-    let bandIndex: Int
-    @ObservedObject private var presetManager = PresetManager.shared
-    @State private var isEditingFreq = false
-    @State private var isEditingQ = false
-    @State private var freqText = ""
-    @State private var qText = ""
-    @FocusState private var freqFieldFocused: Bool
-    @FocusState private var qFieldFocused: Bool
-
-    /// Format frequency for display
-    private func formatFrequency(_ hz: Float) -> String {
-        if hz < 1000 {
-            return "\(Int(hz))"
-        } else if hz < 10000 {
-            return String(format: "%.1fK", hz / 1000)
-        } else {
-            return "\(Int(hz / 1000))K"
-        }
-    }
-
-    /// Parse user-entered frequency text (supports "1k", "1.5k", "250", etc.)
-    private func parseFrequency(_ text: String) -> Float? {
-        let trimmed = text.trimmingCharacters(in: .whitespaces).lowercased()
-        if trimmed.hasSuffix("k") {
-            if let val = Float(trimmed.dropLast()) {
-                return val * 1000
-            }
-        }
-        return Float(trimmed)
-    }
-
-    /// Convert frequency (20–20000) to slider position (0–1) using log scale
-    private func freqToPosition(_ freq: Float) -> Double {
-        Double(log(freq / 20) / log(1000))
-    }
-
-    /// Convert slider position (0–1) to frequency (20–20000) using log scale
-    private func positionToFreq(_ position: Double) -> Float {
-        20 * pow(1000, Float(position))
-    }
-
-    private func commitFreq() {
-        if let hz = parseFrequency(freqText) {
-            presetManager.updateBandFrequency(index: bandIndex, frequencyHz: hz)
-        }
-        isEditingFreq = false
-    }
-
-    private func commitQ() {
-        if let q = Float(qText.trimmingCharacters(in: .whitespaces)) {
-            presetManager.updateBandQ(index: bandIndex, qFactor: q)
-        }
-        isEditingQ = false
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Filter
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(width: 16)
-
-                    Text("Filter")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
-                }
-                .padding(.bottom, 2)
-
-                HStack(spacing: 4) {
-                    ForEach(FilterType.allCases, id: \.self) { type in
-                        let isSelected = presetManager.currentFilterTypes[bandIndex] == type
-                        Button {
-                            presetManager.updateBandFilterType(index: bandIndex, filterType: type)
-                        } label: {
-                            Text(type.shortDisplayName)
-                                .font(.system(size: 9, weight: .medium))
-                                .foregroundColor(isSelected ? .white : .primary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 3)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                        .fill(isSelected ? Color.accentColor : Color(NSColor.separatorColor).opacity(0.25))
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-
-            // Frequency
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(width: 16)
-
-                    Text("Frequency")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
-                }
-
-                Slider(
-                    value: Binding(
-                        get: { freqToPosition(presetManager.currentFrequencies[bandIndex]) },
-                        set: { presetManager.updateBandFrequency(index: bandIndex, frequencyHz: positionToFreq($0)) }
-                    ),
-                    in: 0...1
-                )
-
-                if isEditingFreq {
-                    TextField("", text: $freqText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .frame(width: 60, alignment: .leading)
-                        .multilineTextAlignment(.leading)
-                        .focused($freqFieldFocused)
-                        .onSubmit { commitFreq() }
-                        .onExitCommand { isEditingFreq = false }
-                        .onChange(of: freqFieldFocused) { focused in
-                            if !focused { commitFreq() }
-                        }
-                } else {
-                    Text("\(formatFrequency(presetManager.currentFrequencies[bandIndex])) Hz")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundColor(.primary)
-                        .onTapGesture {
-                            freqText = formatFrequency(presetManager.currentFrequencies[bandIndex])
-                            isEditingFreq = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                freqFieldFocused = true
-                            }
-                        }
-                }
-            }
-
-            // Q
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Image(systemName: "tuningfork")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.secondary)
-                        .frame(width: 16)
-
-                    Text("Q")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundColor(.secondary)
-                }
-
-                Slider(
-                    value: Binding(
-                        get: { Double(presetManager.currentQFactors[bandIndex]) },
-                        set: { presetManager.updateBandQ(index: bandIndex, qFactor: Float($0)) }
-                    ),
-                    in: 0.1...10.0
-                )
-
-                if isEditingQ {
-                    TextField("", text: $qText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .frame(width: 60, alignment: .leading)
-                        .multilineTextAlignment(.leading)
-                        .focused($qFieldFocused)
-                        .onSubmit { commitQ() }
-                        .onExitCommand { isEditingQ = false }
-                        .onChange(of: qFieldFocused) { focused in
-                            if !focused { commitQ() }
-                        }
-                } else {
-                    Text(String(format: "%.2f", presetManager.currentQFactors[bandIndex]))
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundColor(.primary)
-                        .onTapGesture {
-                            qText = String(format: "%.2f", presetManager.currentQFactors[bandIndex])
-                            isEditingQ = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                qFieldFocused = true
-                            }
-                        }
-                }
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
     }
 }
 

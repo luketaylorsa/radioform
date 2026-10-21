@@ -339,3 +339,93 @@ TEST(engine_reset_clears_state) {
     radioform_dsp_destroy(engine);
     PASS();
 }
+
+TEST(engine_preset_change_glides) {
+    // Two engines with the same band; only one gets a large change mid-stream
+    // (like dragging a node across the graph). Right after the change the outputs
+    // must still be close; an instant coefficient swap diverges immediately.
+    auto* changed = radioform_dsp_create(48000);
+    auto* reference = radioform_dsp_create(48000);
+    ASSERT(changed != nullptr && reference != nullptr);
+
+    radioform_preset_t preset;
+    radioform_dsp_preset_init_flat(&preset);
+    preset.num_bands = 1;
+    preset.limiter_enabled = false;
+    preset.bands[0].enabled = true;
+    preset.bands[0].frequency_hz = 1000.0f;
+    preset.bands[0].gain_db = -12.0f;
+    preset.bands[0].q_factor = 1.0f;
+    preset.bands[0].type = RADIOFORM_FILTER_PEAK;
+    radioform_dsp_apply_preset(changed, &preset);
+    radioform_dsp_apply_preset(reference, &preset);
+
+    const size_t half = 24000;
+    auto signal = generate_sine(half * 2, 1000.0f, 48000.0f);
+    for (auto& x : signal) x *= 0.25f;
+    std::vector<float> out_l(signal.size()), out_r(signal.size());
+    std::vector<float> ref_l(signal.size()), ref_r(signal.size());
+
+    radioform_dsp_process_planar(changed, signal.data(), signal.data(), out_l.data(), out_r.data(), half);
+    radioform_dsp_process_planar(reference, signal.data(), signal.data(), ref_l.data(), ref_r.data(), half);
+
+    preset.bands[0].gain_db = 12.0f;
+    radioform_dsp_apply_preset(changed, &preset);
+
+    radioform_dsp_process_planar(changed, signal.data() + half, signal.data() + half,
+                                 out_l.data() + half, out_r.data() + half, half);
+    radioform_dsp_process_planar(reference, signal.data() + half, signal.data() + half,
+                                 ref_l.data() + half, ref_r.data() + half, half);
+
+    auto max_diff = [&](size_t from, size_t to) {
+        float m = 0.0f;
+        for (size_t i = from; i < to; i++) m = std::max(m, std::abs(out_l[i] - ref_l[i]));
+        return m;
+    };
+    const float settled_diff = max_diff(signal.size() - 4800, signal.size());
+    ASSERT(settled_diff > 0.1f);                            // the change did happen
+    ASSERT(max_diff(half, half + 24) < 0.1f * settled_diff);  // first 0.5ms barely moves
+
+    // Both channels see identical coefficients during the glide
+    ASSERT(signals_identical(out_l, out_r));
+
+    radioform_dsp_destroy(changed);
+    radioform_dsp_destroy(reference);
+    PASS();
+}
+
+TEST(engine_disabled_band_fades_to_passthrough) {
+    auto* engine = radioform_dsp_create(48000);
+    ASSERT(engine != nullptr);
+
+    radioform_preset_t preset;
+    radioform_dsp_preset_init_flat(&preset);
+    preset.num_bands = 1;
+    preset.limiter_enabled = false;
+    preset.bands[0].enabled = true;
+    preset.bands[0].frequency_hz = 1000.0f;
+    preset.bands[0].gain_db = 12.0f;
+    preset.bands[0].q_factor = 1.0f;
+    preset.bands[0].type = RADIOFORM_FILTER_PEAK;
+    radioform_dsp_apply_preset(engine, &preset);
+
+    auto signal = generate_sine(48000, 1000.0f, 48000.0f);
+    for (auto& x : signal) x *= 0.1f;
+    std::vector<float> out_l(signal.size());
+    std::vector<float> out_r(signal.size());
+    radioform_dsp_process_planar(engine, signal.data(), signal.data(),
+                                 out_l.data(), out_r.data(), 24000);
+
+    preset.bands[0].enabled = false;
+    radioform_dsp_apply_preset(engine, &preset);
+    radioform_dsp_process_planar(engine, signal.data() + 24000, signal.data() + 24000,
+                                 out_l.data() + 24000, out_r.data() + 24000, 24000);
+
+    // After the fade the band is fully bypassed (only the DC blocker remains)
+    std::vector<float> tail_in(signal.end() - 4800, signal.end());
+    std::vector<float> tail_out(out_l.end() - 4800, out_l.end());
+    ASSERT_NEAR(measure_rms(tail_out), measure_rms(tail_in), 0.001f);
+
+    radioform_dsp_destroy(engine);
+    PASS();
+}

@@ -56,12 +56,33 @@ public:
      * @brief Set coefficients to flat response (passthrough)
      */
     void setCoeffsFlat() {
-        coeffs_.b0 = 1.0f;
-        coeffs_.b1 = 0.0f;
-        coeffs_.b2 = 0.0f;
-        coeffs_.a1 = 0.0f;
-        coeffs_.a2 = 0.0f;
+        coeffs_ = flatCoeffs();
         transition_remaining_ = 0;
+        fading_out_ = false;
+        bypassed_ = true;
+    }
+
+    /**
+     * @brief Fade to a flat response, then bypass the section entirely
+     *
+     * Used when a band is disabled while audio is running so the band
+     * doesn't drop out with a click.
+     */
+    void setCoeffsFlatSmooth(int transition_samples) {
+        if (bypassed_) return;
+        if (transition_samples <= 0) {
+            setCoeffsFlat();
+            return;
+        }
+        startTransition(flatCoeffs(), transition_samples);
+        fading_out_ = true;
+    }
+
+    /**
+     * @brief True while the section affects the signal (not flat and settled)
+     */
+    bool isActive() const {
+        return !bypassed_;
     }
 
     /**
@@ -69,12 +90,17 @@ public:
      */
     void setCoeffs(const radioform_band_t& band, float sample_rate) {
         BiquadCoeffs c = calculateCoeffs(band, sample_rate);
-        if (isFinite(c)) {
-            coeffs_ = c;
-        } else {
+        if (!isFinite(c)) {
             setCoeffsFlat();
+            return;
         }
+        if (bypassed_) {
+            reset();
+        }
+        coeffs_ = c;
         transition_remaining_ = 0;
+        fading_out_ = false;
+        bypassed_ = false;
     }
 
     /**
@@ -93,27 +119,29 @@ public:
             setCoeffsFlat();
             return;
         }
-        target_coeffs_ = c;
-
         if (transition_samples <= 0) {
-            coeffs_ = target_coeffs_;
-            transition_remaining_ = 0;
+            setCoeffs(band, sample_rate);
             return;
         }
 
-        const float inv_n = 1.0f / static_cast<float>(transition_samples);
-        coeffs_delta_.b0 = (target_coeffs_.b0 - coeffs_.b0) * inv_n;
-        coeffs_delta_.b1 = (target_coeffs_.b1 - coeffs_.b1) * inv_n;
-        coeffs_delta_.b2 = (target_coeffs_.b2 - coeffs_.b2) * inv_n;
-        coeffs_delta_.a1 = (target_coeffs_.a1 - coeffs_.a1) * inv_n;
-        coeffs_delta_.a2 = (target_coeffs_.a2 - coeffs_.a2) * inv_n;
-        transition_remaining_ = transition_samples;
+        // Waking from bypass: start from a clean delay line at flat coefficients
+        if (bypassed_) {
+            reset();
+            coeffs_ = flatCoeffs();
+            bypassed_ = false;
+        }
+
+        // Interpolating a1/a2 linearly between two stable filters stays inside
+        // the (convex) stability triangle, so any type-to-type glide is safe.
+        startTransition(c, transition_samples);
+        fading_out_ = false;
     }
 
     /**
      * @brief Process one sample (stereo)
      */
     inline void processSample(float in_l, float in_r, float* out_l, float* out_r) {
+        advanceTransition();
         *out_l = processSampleMono(in_l, state_left_);
         *out_r = processSampleMono(in_r, state_right_);
     }
@@ -127,6 +155,7 @@ public:
         uint32_t num_frames
     ) {
         for (uint32_t i = 0; i < num_frames; i++) {
+            advanceTransition();
             out_l[i] = processSampleMono(in_l[i], state_left_);
             out_r[i] = processSampleMono(in_r[i], state_right_);
         }
@@ -141,14 +170,29 @@ public:
     }
 
 private:
+    static BiquadCoeffs flatCoeffs() {
+        return {1.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+    }
+
+    void startTransition(const BiquadCoeffs& target, int transition_samples) {
+        target_coeffs_ = target;
+        const float inv_n = 1.0f / static_cast<float>(transition_samples);
+        coeffs_delta_.b0 = (target_coeffs_.b0 - coeffs_.b0) * inv_n;
+        coeffs_delta_.b1 = (target_coeffs_.b1 - coeffs_.b1) * inv_n;
+        coeffs_delta_.b2 = (target_coeffs_.b2 - coeffs_.b2) * inv_n;
+        coeffs_delta_.a1 = (target_coeffs_.a1 - coeffs_.a1) * inv_n;
+        coeffs_delta_.a2 = (target_coeffs_.a2 - coeffs_.a2) * inv_n;
+        transition_remaining_ = transition_samples;
+    }
+
     /**
-     * @brief Process one sample (mono) using Direct Form 2 Transposed
+     * @brief Step coefficient interpolation by one frame
      *
-     * During coefficient transitions, linearly interpolates coefficients
-     * per sample to prevent zipper noise. Zero overhead when stable.
+     * Called once per stereo frame so both channels share the same
+     * coefficients. Zero overhead when stable.
      */
-    inline float processSampleMono(float input, BiquadState& state) {
-        // Interpolate coefficients during transition (branch predicted not-taken when stable)
+    inline void advanceTransition() {
+        // Branch predicted not-taken when stable
         if (transition_remaining_ > 0) {
             coeffs_.b0 += coeffs_delta_.b0;
             coeffs_.b1 += coeffs_delta_.b1;
@@ -158,9 +202,18 @@ private:
             if (--transition_remaining_ == 0) {
                 // Snap to target to prevent float drift
                 coeffs_ = target_coeffs_;
+                if (fading_out_) {
+                    fading_out_ = false;
+                    bypassed_ = true;
+                }
             }
         }
+    }
 
+    /**
+     * @brief Process one sample (mono) using Direct Form 2 Transposed
+     */
+    inline float processSampleMono(float input, BiquadState& state) {
         float output = coeffs_.b0 * input + state.z1;
         state.z1 = coeffs_.b1 * input - coeffs_.a1 * output + state.z2;
         state.z2 = coeffs_.b2 * input - coeffs_.a2 * output;
@@ -301,6 +354,8 @@ private:
     BiquadCoeffs target_coeffs_;
     BiquadCoeffs coeffs_delta_;
     int transition_remaining_ = 0;
+    bool bypassed_ = true;      // Flat and settled: skip processing entirely
+    bool fading_out_ = false;   // Becomes bypassed when the current transition ends
     BiquadState state_left_;
     BiquadState state_right_;
 };

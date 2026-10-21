@@ -40,6 +40,8 @@ void test_engine_limiter_prevents_clipping();
 void test_engine_update_band_gain_realtime();
 void test_engine_statistics_tracking();
 void test_engine_reset_clears_state();
+void test_engine_preset_change_glides();
+void test_engine_disabled_band_fades_to_passthrough();
 
 // Frequency response tests
 void test_freq_response_flat_preset_is_transparent();
@@ -81,6 +83,8 @@ int main(int argc, char** argv) {
     REGISTER_TEST(engine_update_band_gain_realtime);
     REGISTER_TEST(engine_statistics_tracking);
     REGISTER_TEST(engine_reset_clears_state);
+    REGISTER_TEST(engine_preset_change_glides);
+    REGISTER_TEST(engine_disabled_band_fades_to_passthrough);
 
     REGISTER_TEST(freq_response_flat_preset_is_transparent);
     REGISTER_TEST(freq_response_peak_filter_at_1khz);

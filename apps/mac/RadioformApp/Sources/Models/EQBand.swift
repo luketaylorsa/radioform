@@ -22,6 +22,14 @@ enum FilterType: Int, Codable, CaseIterable {
         }
     }
 
+    /// Peak and shelf filters use gain; pass, notch and band-pass filters ignore it
+    var usesGain: Bool {
+        switch self {
+        case .peak, .lowShelf, .highShelf: return true
+        case .lowPass, .highPass, .notch, .bandPass: return false
+        }
+    }
+
     var shortDisplayName: String {
         switch self {
         case .peak: return "Peak"
