@@ -46,19 +46,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func initializeUpdater() {
-        // Initialize Sparkle with standard user driver
+        // Sparkle is created but never started: this build's feed is the official
+        // release, and installing it would replace this build with one that lacks
+        // the parametric EQ. No background or scheduled checks run.
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: true,
+            startingUpdater: false,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
-        print("✓ Sparkle updater initialized")
-
-        // Trigger a background check on launch so updates are offered immediately,
-        // unless the user (or this build's Info.plist) turned update checks off
-        if updaterController?.updater.automaticallyChecksForUpdates == true {
-            updaterController?.updater.checkForUpdatesInBackground()
-        }
+        print("✓ Sparkle updater disabled for this build")
     }
 
     func checkDriverVersionMismatch() {
