@@ -73,7 +73,7 @@ struct MenuBarView: View {
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
 
-                    // Contextual area: band controls (focused) or presets (default)
+                    // Selected band or preamp controls, shown above the presets
                     if let focusedIndex = presetManager.focusedBandIndex {
                         if focusedIndex < PresetManager.bandCount {
                             // Selected band: filter type, frequency, gain, Q
@@ -86,36 +86,36 @@ struct MenuBarView: View {
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 6)
                         }
-                    } else {
-                        // Default: preset dropdown
-                        PresetDropdown(isExpanded: $showPresets)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
+                    }
 
-                        // Preset list (animated expand/collapse)
-                        if showPresets {
-                            PresetList(
-                                presets: presetManager.allPresets.filter { $0.id != presetManager.currentPreset?.id },
-                                activeID: presetManager.currentPreset?.id,
-                                userPresetIDs: presetManager.userPresetIDs,
-                                onSelect: { preset in
-                                    presetManager.applyPreset(preset)
-                                    showPresets = false
-                                },
-                                onDelete: { preset in
-                                    do {
-                                        try presetManager.deletePreset(preset)
-                                        if preset.id == presetManager.currentPreset?.id {
-                                            presetManager.currentPreset = nil
-                                        }
-                                    } catch {
-                                        print("Failed to delete preset: \(error)")
+                    // Presets stay available while a band is selected
+                    PresetDropdown(isExpanded: $showPresets)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+
+                    // Preset list (animated expand/collapse)
+                    if showPresets {
+                        PresetList(
+                            presets: presetManager.allPresets.filter { $0.id != presetManager.currentPreset?.id },
+                            activeID: presetManager.currentPreset?.id,
+                            userPresetIDs: presetManager.userPresetIDs,
+                            onSelect: { preset in
+                                presetManager.applyPreset(preset)
+                                showPresets = false
+                            },
+                            onDelete: { preset in
+                                do {
+                                    try presetManager.deletePreset(preset)
+                                    if preset.id == presetManager.currentPreset?.id {
+                                        presetManager.currentPreset = nil
                                     }
+                                } catch {
+                                    print("Failed to delete preset: \(error)")
                                 }
-                            )
-                            .padding(.horizontal, 8)
-                            .padding(.bottom, 6)
-                        }
+                            }
+                        )
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 6)
                     }
                 }
 
