@@ -3,6 +3,7 @@
 # Builds all components as universal binaries (arm64 + x86_64)
 
 set -e  # Exit on error
+set -o pipefail  # ...including in "swift build | tail", so a compile error can't ship a stale binary
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
